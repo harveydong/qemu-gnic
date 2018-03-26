@@ -1,0 +1,367 @@
+
+#include "qemu/osdep.h"
+#include "net/tap.h"
+#include "qemu/range.h"
+#include "hw/pci/msi.h"
+#include "hw/pci/msix.h"
+
+
+#include "hw/pci/pci.h"
+#include "sysemu/dma.h"
+#include "qemu/timer.h"
+#include "net/net.h"
+#include "net/eth.h"
+#include "sysemu/sysemu.h"
+#include "qemu/iov.h"
+
+#include "hw/net/zxiw_regs.h"
+
+#define	TYPE_ZXIW "zxiw"
+#define	ZXIW_PCI_REVID	0x01
+#define	ZXIW_MMIO_SIZE	0x800	
+#define	ZXIW_MMIO_IDX	1
+#define	ZXIW_MSIX_IDX	3
+
+#define	ZXIW_MSIX_SIZE 0x2000
+#define	ZXIW_MSIX_TABLE (0x0000)
+#define	ZXIW_MSIX_PBA	(0x2000)
+#define	ZXIW_MSIX_VEC_NUM 8
+#define ZXIW_BUFFS_PER_DESC 256
+#define	ZXIW_TX_NUM_QUEUES	4
+#define	ZXIW_RX_NUM_QUEUES	8
+#define ZXIW_MAX_TX_FRAGS	4
+
+
+typedef struct EEpromat93c46d {
+/*CSR00-CSR05*/
+	uint8_t mac_address[6];
+/*CSR085,0X6C*/
+	uint8_t mii_polling_setting;
+	uint8_t sub_sid[2];
+	uint8_t	sub_vid[2];
+	uint8_t devid[2];
+	uint8_t pmcc;
+	uint8_t data_sel;
+	uint8_t pmu_data_reg;
+	uint8_t auxcurr;
+	uint8_t mcfg[2];
+	uint8_t min_gnt;
+	uint8_t max_lat;
+	uint8_t dcfg[2];
+	uint8_t cfga_d[4];
+	uint8_t chksum;
+	
+}EEpromat93c46d;
+
+typedef struct ZXIWallcounters {
+	uint32_t rxallpkts;
+	uint32_t rxokpkts; 
+	uint32_t txokpkts; 
+	uint32_t rxerrorpkts;
+	uint32_t rxruntokpkt;
+	uint32_t rxrunterrpkt;
+	uint32_t rx64pkts;
+	uint32_t tx64pkts;
+	uint32_t rx65to127pkts;
+	uint32_t tx65to127pkts;
+	uint32_t rx128to255pkts; 
+	uint32_t tx128to255pkts; 
+	uint32_t rx256to511pkts;
+	uint32_t tx256to511pkts;
+	uint32_t rx512to1023pkts;	
+	uint32_t tx512to1023pkts;	
+	uint32_t rx1024to1518pkts;
+	uint32_t tx1024to1518pkts;
+
+	uint32_t txethercollisions;
+	uint32_t rxpktcrce;
+	uint32_t rxjumbopkts;
+	uint32_t txjumbopkts;
+	uint32_t rxmaccontrolframes;
+	uint32_t txmaccontrolframes;
+	uint32_t rxpktfae;
+	uint32_t rxlongokpkt;
+	uint32_t rxlongpkterrpkt;
+	uint32_t txsqeerrors;
+	uint32_t rxnobuf;
+	uint32_t rxsymbolerrors;
+	uint32_t inrangelentherrors;
+	uint32_t latecollisions;
+	
+}ZXIWallcounters;
+
+typedef struct zxiw_tx_props {
+	uint8_t ipcss;
+
+}zxiw_tx_props;
+
+typedef struct zxiw_rx_props{
+	uint8_t rx_rss;
+
+}zxiw_rx_props;
+
+typedef struct ZXIWCore{
+	uint32_t mac[8];
+	uint16_t phy[8];
+	EEpromat93c46d eeprom;
+
+	uint32_t rx_desc_buf_size;
+	uint8_t rx_desc_len;
+	
+	QEMUTimer *autoneg_timer;
+	
+	struct zxiw_tx{
+		zxiw_txd_props props;
+		struct NetTxPkt *tx_pkt;
+
+	}tx[ZXIW_TX_NUM_QUEUES];
+
+	struct zxiw_rx{
+		zxiw_rxd_props props;
+		struct NetRxPkt *rx_pkt;
+	}rx[ZXIW_RX_NUM_QUEUES];
+
+	int max_queue_num;
+	VMChangeStateEntry *vmstate;
+	
+	uint8_t permanent_mac[ETH_ALEN];
+	NICState *owner_nic;
+	PCIDevice *owner;
+	void (*owner_start_recv)(PCIDevice *d);
+	
+}ZXIWCore;
+
+
+
+
+typedef struct ZXIWState {
+	PCIDevice parent_obj;
+	
+	NICConf	conf;	
+	NICState *nic;
+	
+	ZXIWallcounters all_counters;
+	
+	MemoryRegion msix;
+	MemoryRegion mmio;
+	
+	uint16_t subsys_ven;
+	uint16_t subsys;
+	uint16_t subsys_ven_used;
+	uint16_t subsys_used;
+
+	ZXIWCore core;	
+		
+
+}ZXIWState;
+
+#define	ZXIW(obj) OBJECT_CHECK(ZXIWState,(obj),TYPE_ZXIW)
+
+static const MemoryRegionOps zxiw_mmio_ops = {
+
+	.read = zxiw_mmio_read,
+	.write = zxiw_mmio_write,
+	.endianness = DEVICE_LITTLE_ENDIAN,
+	.impl = {
+		.min_access_size = 4,
+		.max_access_size = 4,
+	},
+
+};
+
+static void zxiw_unuse_msix_vectors(ZXIWState *s,int num_vectors)
+{
+	int i;
+	
+	for(i = 0; i < num_vectors;i++){
+		msix_vector_unuse(PCI_DEVICE(s),i);
+	}
+}
+
+static bool zxiw_use_msix_vectors(ZXIWState *s,int num_vectors)
+{
+	int i;
+	
+	for(i = 0; i < num_vectors;i++){
+		int res = msix_vector_use(PCI_DEVICE(s),i);
+		if(res < 0){
+			printf("use msix vectors %d failed\n",i);
+			zxiw_unuse_msix_vectors(s,i);
+			return false;
+		}
+	}
+
+	return true;
+
+}
+
+
+static void zxiw_init_msix(ZXIWState *s)
+{
+	PCIDevice *d = PCI_DEVICE(s);
+	int res;
+
+	res = msix_init(PCI_DEVICE(S),ZXIW_MSIX_VEC_NUM,&s->msix,ZXIW_MSIX_IDX,ZXIW_MSIX_TABLE,&s->msix,ZXIW_MSIX_IDX,ZXIW_MSIX_PBA,0xE0,NULL);
+	
+	if(res < 0)
+	{
+		printf("init msix failed\n");
+	}else{
+		if(!zxiw_use_msix_vectors(s,ZXIW_MSIX_VEC_NUM)){
+			msix_uninit(d,&s->msix,&s->msix);
+		}
+
+	}
+
+
+}
+
+
+static void zxiw_init_net_peer(ZXIWState *s,PCIDevice *pdev,uint8_t *macaddr)
+{
+
+	DeviceState *dev = DEVICE(pdev);
+	NetClientState *nc;
+	int i;
+
+	s->nic = qemu_new_nic(*net_zxiw_info,&s->conf,object_get_typename(OBJECT(s)),dev->id,s);
+
+	s->core.max_queue_num = s->conf.peers.queues - 1;
+	memcpy(s->core.permanent_mac,macaddr,sizeof(s->core.permanent_mac));
+
+	qemu_format_nic_info_str(qemu_get_queue(s->nic),macaddr);
+	return;
+	
+
+}
+
+
+static void zxiw_core_realize(ZXIWState *s)
+{
+	s->core.owner = &s->parent_obj;
+	s->core.owner_nic = s->nic;
+}
+
+static const uint8_t zxiw_eeprom_template[] = {
+	0x00,0x02,0x02a,0xe0,0x43,0x0d,0x00,0x00,0x10,0x01,0x06,0x11,0x80,0x91,0x17,0x1d,0x1f,0x00,0x00,0x80,0x00,0x01,0x00,0x00,0x00,0x00,0x03,0x10,0x00,0x00,0x74,0x11,0x00,0x00,0x00,0xff,0x0a,0x00,0x00,0x00,
+
+};
+
+void zxiw_core_pci_realize(ZXIWCore *core, const uint8_t *eeprom_templ,uint32_t eeprom_size,const uint8_t *macaddr)
+{
+	int i;
+
+	core->autoneg_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL,zxiw_autoneg_timer,core);
+
+	core->vmstate = qemu_add_vm_change_state_handler(zxiw_vm_state_change,core);
+	for(i = 0; i < ZXIW_TX_NUM_QUEUES;i++)
+		net_tx_pkt_init(&core->tx[i].tx_pkt,core->owner,ZXIW_MAX_TX_FRAGS,false);
+
+	for(i = 0; i < ZXIW_RX_NUM_QUEUES;i++i)
+		net_rx_pkt_init(&core->rx[i],false);
+
+	zxiw_core_prepare_eeprom(core->eeprom,eeprom_templ,eeprom_size,PCI_DEVICE_GET_CLASS(core->owner)->device_id,macaddr);
+
+		
+
+}
+
+static void pci_zxiw_realize(PCIDevice *pdev,Error **errp)
+{
+	ZXIWState *s = ZXIW(pdev);
+	uint8_t *macaddr;
+	int ret;
+
+
+	pdev->config_write = zxiw_write_config;
+	pdev->config[PCI_INTERRUPT_PIN] = 1;
+	
+	pci_set_word(pdev->config + PCI_SUBSYSTEM_VENDOR_ID,s->subsys_ven);
+	pci_set_word(pdev->config + PCI_SUBSYSTEM_ID,s->subsys);
+	s->subsys_ven_used = s->subsys_ven;
+	s->subsys_used = s->subsys;
+	
+	memory_region_init_io(&s->mmio,OBJECT(s),&zxiw_mmio_ops,s,"zxiw-mmio",ZXIW_MMIO_SIZE);	
+
+	pci_register_bar(pdev,ZXIW_MMIO_IDX,PCI_BASE_ADDRESS_SPACE_MEMORY,&s->mmio);
+	memory_region_init(&s->msix,OBJECT(s),"zxiw-msix",ZXIW_MSIX_SIZE);
+	pci_register_bar(pdev,ZXIW_MSIX_IDX,PCI_BASE_ADDRESS_SPACE_MEMORY,&s->msix);
+
+	qemu_macaddr_default_if_unset(&s->conf.macaddr);
+	macaddr = s->conf.macaddr.a;
+
+	zxiw_init_msix(s);
+
+	
+	zxiw_init_net_peer(s,pdev,macaddr);
+
+	zxiw_core_realize(s);
+	zxiw_core_pci_realize(&s->core,zxiw_eeprom_template,sizeof(zxiw_eeprom_template),macaddr);
+	printf("zxiw here is realize\n");
+}
+
+static void pci_zxiw_uninit(PCIDevice *pdev)
+{
+
+	printf("zxiw uninit\n");
+}
+
+static void zxiw_reset(DeviceState *d)
+{
+
+	printf("zxiw reset here\n");
+}
+
+static void zxiw_instance_init(Object *obj)
+{
+	//ZXIWState *s = ZXIW(obj);
+
+	printf("here is zxiw_instance_init\n"); 
+
+}
+
+static Property zxiw_properties[] = {
+	DEFINE_NIC_PROPERTIES(ZXIWState,conf),
+	DEFINE_PROP_END_OF_LIST(),
+
+};
+
+static void zxiw_class_init(ObjectClass *kclass,void *data)
+{
+	DeviceClass *dc = DEVICE_CLASS(kclass);
+	PCIDeviceClass *k = PCI_DEVICE_CLASS(kclass);
+
+	k->realize = pci_zxiw_realize;
+	k->exit = pci_zxiw_uninit;
+	//k->romfile = "efi-zxiw.rom";	
+	k->vendor_id = PCI_VENDOR_ID_ZX;
+	k->device_id = PCI_DEVICE_ID_ZX_IW;
+	k->revision = ZXIW_PCI_REVID; 
+	k->class_id = PCI_CLASS_NETWORK_ETHERNET;
+	k->is_express	= 1;
+	
+	dc->desc = "ZhaoXin Gigabit iwarp controller";
+	
+	dc->reset = zxiw_reset;
+	dc->props = zxiw_properties;
+	set_bit(DEVICE_CATEGORY_NETWORK,dc->categories);
+
+}
+
+
+static const TypeInfo zxiw_info = {
+	.name = TYPE_ZXIW,
+	.parent = TYPE_PCI_DEVICE,
+	.instance_size = sizeof(ZXIWState),
+	.class_init = zxiw_class_init,
+	.instance_init = zxiw_instance_init,
+	
+};
+
+static void zxiw_register_type(void)
+{
+
+	type_register_static(&zxiw_info);
+}
+
+type_init(zxiw_register_type)
