@@ -325,7 +325,7 @@ void msi_notify(PCIDevice *dev, unsigned int vector)
 
     msg = msi_get_message(dev, vector);
    
-printf("%s, dev->name is %s, notify vector 0x%x, address: 0x%"PRIx64" data: 0x%"PRIx32"\n",__func__,dev->name, vector, msg.address, msg.data);
+//printf("%s, dev->name is %s, notify vector 0x%x, address: 0x%"PRIx64" data: 0x%"PRIx32"\n",__func__,dev->name, vector, msg.address, msg.data);
     msi_send_message(dev, msg);
 }
 
@@ -333,7 +333,7 @@ void msi_send_message(PCIDevice *dev, MSIMessage msg)
 {
     MemTxAttrs attrs = {};
 
-	printf("%s,and into before call address_space_stl_le by dhw\n",__func__);
+//	printf("%s,and into before call address_space_stl_le by dhw\n",__func__);
     attrs.requester_id = pci_requester_id(dev);
     address_space_stl_le(&dev->bus_master_as, msg.address, msg.data,
                          attrs, NULL);

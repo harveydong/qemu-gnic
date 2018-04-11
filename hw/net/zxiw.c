@@ -7,8 +7,6 @@
 #include "net_tx_pkt.h"
 #include "net_rx_pkt.h"
 
-
-
 #include "hw/pci/pci.h"
 #include "sysemu/dma.h"
 #include "qemu/timer.h"
@@ -19,6 +17,7 @@
 
 #include "hw/net/zxiw_regs.h"
 #include "hw/net/zxiw_common.h"
+#include "hw/net/zxiw_reg_result.h"
 
 #define	TYPE_ZXIW "zxiw"
 #define	ZXIW_PCI_REVID	0x01
@@ -103,6 +102,9 @@ typedef struct zxiw_tx_props {
 typedef struct zxiw_rx_props{
 	uint8_t rx_rss;
 	uint8_t checksum;
+	uint8_t proto_type_mac;
+	uint8_t upper_proto_type;
+	
 }zxiw_rx_props;
 
 static uint8_t mac_init_default[ZXIW_MAC_SIZE] = {
@@ -186,7 +188,7 @@ typedef struct ZXIWCore{
 	QEMUTimer *timer0;
 	QEMUTimer *timer1;
 	
-	struct zxiw_tx{
+	struct zxiw_tx_queue{
 		zxiw_tx_props props;
 		struct NetTxPkt *tx_pkt;
 		uint32_t tx_desc_base_hi,tx_desc_addr_hi;
@@ -194,12 +196,17 @@ typedef struct ZXIWCore{
 		uint16_t tdindex;
 		uint16_t tdcsize;
 
-	}tx[ZXIW_TX_NUM_QUEUES];
+	}tx_queue[ZXIW_TX_NUM_QUEUES];
 
-	struct zxiw_rx{
+	struct zxiw_rx_queue{
 		zxiw_rx_props props;
 		struct NetRxPkt *rx_pkt;
-	}rx[ZXIW_RX_NUM_QUEUES];
+		size_t current_index;
+		size_t queue_size;
+		uint32_t rx_queue_base_hi;
+		uint32_t rx_queue_base_lo;
+		
+	}rx_queue[ZXIW_RX_NUM_QUEUES];
 
 	int max_queue_num;
 	VMChangeStateEntry *vmstate;
@@ -259,15 +266,40 @@ static uint64_t zxiw_hw_hib_read(ZXIWCore *core,hwaddr addr,unsigned size)
 
 }
 
+static uint64_t zxgb_read_phy_reg(ZXIWCore *core,hwaddr addr,unsigned size)
+{
+	uint16_t val = 0;
+	uint8_t index = 0;
+	
+	index = core->mac[0X71];
+	switch(size){
+	case 1:
+		break;
+	case 2:
+		val = core->phy[index];
+		break;	
+	}
+	return val;
+}
+
 
 static uint64_t zxiw_core_read(ZXIWCore *core,hwaddr addr,unsigned size)
 {
 	uint64_t val = 0;
 //	uint16_t index = zxiw_get_reg_index_with_offset();
 
-	printf("mmio read addr is 0x%lx,and size is %d\n",addr,size);
+	//printf("mmio read addr is 0x%lx,and size is %d\n",addr,size);
 	if(addr == 0x84)
 		return zxiw_hw_hib_read(core,addr,size);
+		
+		
+	if(addr == 0x72)
+	{
+			return zxgb_read_phy_reg(core,addr,size);
+	}
+	
+	 
+		
 	switch(size){
 	case 1:
 		val = core->mac[addr];
@@ -284,6 +316,15 @@ static uint64_t zxiw_core_read(ZXIWCore *core,hwaddr addr,unsigned size)
 		
 
 	}
+	
+	if(addr == 0x24){
+			//printf("original value is:0x%x, 0x%x\n ",core->mac[addr],core->mac[addr+1]);
+			core->mac[addr] = 0x00;
+			core->mac[addr+1] = 0x00;
+			core->mac[addr+2] = 0x00;
+			core->mac[addr+3] = 0x00;
+	}
+	//printf("mmio read addr is 0x%lx,and size is %d,and val:0x%lx\n",addr,size,val);
 	return val;
 }
 
@@ -294,10 +335,250 @@ static uint64_t zxiw_mmio_read(void *opaque,hwaddr addr,unsigned size)
 }
 
 
+static void zxiw_mii_write_addr_data_port(ZXIWCore *core,hwaddr addr,uint64_t val,unsigned size)
+{
+	switch(size){
+	case 1:
+		core->mac[addr] = (uint8_t)val;
+		break;
+	}
+	if(core->mac[0x70] & 0x80)
+			core->mac[0x6d] = 0;
+	else if(!core->mac[0X70]){
+			core->mac[0x6d] = 1;
+	}
+	
+	if(core->mac[0x70] & 0x40){
+			core->mac[0x70] &= ~(0X40);
+	}else if(core->mac[0x70] & 0x20){
+			core->mac[0x70] &= ~(0X20);
+	}
+}
+
+
+static void zxiw_set_interrupt_cause(ZXIWCore *core,uint32_t val)
+{
+	bool is_msix = msix_enabled(core->owner);
+	
+	(core->mac[0x24]) = val & 0xff;
+	(core->mac[0x25]) = (uint8_t)(val >> 8) & 0xff;
+	(core->mac[0x26]) = (uint8_t)(val >> 16) & 0xff;
+	(core->mac[0x27]) = (uint8_t)(val >> 24) & 0xff;
+	
+	if(is_msix || msi_enabled(core->owner)){
+			msix_notify(core->owner,0);
+	}
+	
+}
+
+#if 0
+static bool zxiw_tx_pkt_send(ZXIWCore *core,struct zxiw_tx_queue *tx)
+{
+		NetClientState *queue = qemu_get_subqueue(core->owner_nic,0);
+		net_tx_pkt_dump(tx->tx_pkt);
+		
+		return net_tx_pkt_send(tx->tx_pkt,queue);
+}
+
+#endif
+
+static bool zxiw_process_tx(ZXIWCore *core,struct zxiw_tx_queue *tx,struct zxiw_tx_desc *tx_desc,int seg_num)
+{
+	uint64_t addr_hi;
+	uint64_t addr_lo;
+	uint64_t addr;
+	int i,j;
+	uint16_t buf_size;
+	uint8_t *pkt_buf = NULL;
+	uint32_t offset = 0;
+	uint32_t total_size = 0;
+	PCIDevice *d = core->owner;
+	
+	addr_hi = tx_desc->tx_q_data_buf0_hi & 0xffff;
+	addr_lo = tx_desc->tx_data_buf0_lo;
+	addr = (addr_hi << 32 | addr_lo);
+	
+	total_size = (tx_desc->tx_owner_packet_size >> 16) & 0x3fff;
+	printf("%s,and total_size is %d\n",__FUNCTION__,total_size);
+	buf_size = (tx_desc->tx_q_data_buf0_hi >> 16) & 0x3fff;
+
+	 pkt_buf = g_malloc(total_size);
+	 pci_dma_read(d,addr,pkt_buf+offset,buf_size);
+	 offset += buf_size;
+	 
+#if 0	
+	if(!net_tx_pkt_add_raw_fragment(tx->tx_pkt,addr,buf_size)){
+
+		printf("tx add raw not ok\n");
+	}
+		
+#endif
+		
+	for(i = 1,j = 0; i < seg_num; i++)
+	{
+		
+			addr_lo = le64_to_cpu(tx_desc->tx_data_buf1_7[j]);
+			
+			addr_hi = le64_to_cpu(tx_desc->tx_data_buf1_7[j+1]) & 0xffff;
+			addr = (addr_hi << 32 | addr_lo);
+			buf_size = le64_to_cpu(tx_desc->tx_data_buf1_7[j+1]) & 0x3fff;
+			pci_dma_read(d,addr,pkt_buf+offset,buf_size);
+			
+			j = j+2;
+			offset += buf_size;
+	//		if(!net_tx_pkt_add_raw_fragment(tx->tx_pkt,addr,buf_size)){
+	//			printf("seg tx not ok\n");
+	//		}
+	}
+#if 0
+	printf("transmit data");
+	for(i = 0; i < 14;i++)
+		printf(":%x",pkt_buf[i]);
+		
+	printf("\n");
+#endif
+	
+	qemu_send_packet(qemu_get_queue(core->owner_nic),pkt_buf,total_size);
+	 
+	tx_desc->tx_owner_packet_size &= ~(0x80000000);
+		
+ 
+	g_free(pkt_buf);
+	//net_tx_pkt_reset(tx->tx_pkt);
+	return true;
+}
+	
+static void zxiw_tx_desc_ctrl(ZXIWCore *core,hwaddr addr,uint64_t val,unsigned size)
+{
+	struct zxiw_tx_queue *tx = &core->tx_queue[0];
+	uint16_t tdindex0 = tx->tdindex;  //(core->mac[0x54] | (core->mac[0x55] & 0x0f) << 8) & 0xfff;
+	dma_addr_t base = tx->tx_desc_base_lo;
+	dma_addr_t desc_base;
+	struct zxiw_tx_desc *tx_desc;
+	int tdesc_size = sizeof(struct zxiw_tx_desc);
+	
+	int cmdcz;
+	int qlist;
+	
+//	printf("why here\n");	
+	//printf("why here\n");	
+	//printf("why here\n");	
+	printf("why here,and base is %lx\n",base);	
+	if(val & 0x01){
+		//	printf("now before\n");
+			core->mac[addr] = 0x01;
+			//printf("now after\n");
+			return;
+	} else if(val & 0x04){
+			core->mac[addr] = (val & 0x04);
+			tx_desc = (struct zxiw_tx_desc *)g_malloc(sizeof(struct zxiw_tx_desc));
+			
+			/*pan duan ring shi fu wei kong ,wei kong ,ze bu chuli ,bu wei kong ,ze chuli*/
+			while(1){
+				//printf("into  transmit \n");
+				memset(tx_desc,0,sizeof(struct zxiw_tx_desc));
+				
+				tdindex0 = tdindex0 % (tx->tdcsize+1);
+				//printf("into  1 transmit ,and index:%d\n",tdindex0);
+				desc_base = base + tdindex0*tdesc_size;
+				printf("descriptor %d, desc base: 0x%lx,and tx_queu_size:%d\n",tdindex0,desc_base,tx->tdcsize);
+				pci_dma_read(core->owner,desc_base,tx_desc,sizeof(struct zxiw_tx_desc));
+				if(!(tx_desc->tx_owner_packet_size & 0x80000000))
+					break;
+				
+				
+				cmdcz = (tx_desc->tx_cmdz >> 28);
+				qlist = (tx_desc->tx_q_data_buf0_hi >> 31);
+				if(cmdcz > 7)
+					break;
+					//printf("into 2 transmit \n");
+				if(zxiw_process_tx(core,tx,tx_desc,cmdcz)){
+					pci_dma_write(core->owner,desc_base,tx_desc,sizeof(struct zxiw_tx_desc));
+				}
+				
+				tdindex0++;
+				tx->tdindex = tdindex0;
+				core->mac[0x54] = tx->tdindex;
+				
+				zxiw_set_interrupt_cause(core,0x00000018);
+				if(!qlist)
+					break;
+				
+				
+			}
+			
+			g_free(tx_desc);
+			
+			 
+			
+	}
+
+	//printf("i will back\n");	
+}
+
+static void zxiw_set_mac_ctrl_reg(ZXIWCore *core,hwaddr addr,uint64_t val,unsigned size)
+{
+	if(val & 0x00008000){
+			core->mac[addr+1] &= ~(0x80);
+	}
+}
+
+
 static void zxiw_core_write(ZXIWCore *core,hwaddr addr,uint64_t val,unsigned size)
 {
 
-	printf("mmio write addr 0x%lx,and val is 0x%lx,and size is %d\n",addr,val,size);
+	uint8_t tmp = 0;
+	
+	if(addr == 0x1ec)
+		printf("mmio write addr 0x%lx,and val is 0x%lx,and size is %d,and value:0x%x\n",addr,val,size,core->mac[addr]);
+	
+	switch(addr){
+	case 0x70:
+		zxiw_mii_write_addr_data_port(core,addr,val,size);
+		return;	
+	
+	case 0x08:
+		zxiw_set_mac_ctrl_reg(core,addr,val,size);
+		return;
+		
+	case 0x30:
+		zxiw_tx_desc_ctrl(core,addr,val,size);
+		return;
+		
+	case 0x40:
+		core->tx_queue[0].tx_desc_base_lo = val;
+		break;
+	case 0x52:
+		core->tx_queue[0].tdcsize = val;
+		break;
+	case 0x54:
+		core->tx_queue[0].tdindex = 0;
+		break;
+	
+	case 0x18:
+		core->rx_queue[0].rx_queue_base_hi = val & 0xffffffff;
+		break;
+	case 0x1f4:
+		core->rx_queue[0].rx_queue_base_lo = val & 0xffffffc0;
+		break;
+	case 0x214:
+		core->rx_queue[0].queue_size = val & 0xffff;
+		break;
+		
+	case 0x1d8:
+		core->rx_queue[0].current_index = val & 0xffff;
+		break;
+	case 0x1ec:
+		if(val == 0x04)
+		{
+				tmp = core->mac[addr];
+		}
+		
+		val |= tmp;
+		break;
+	}
+	
+	
 	switch(size){
 	case 1:
 		core->mac[addr] = (uint8_t)val;
@@ -395,13 +676,277 @@ static void zxiw_cleanup_msix(ZXIWState *s)
 
 static int zxiw_can_receive(NetClientState *nc)
 {
+	ZXIWState *s = qemu_get_nic_opaque(nc);
+	ZXIWCore *core = &s->core;
+	PCIDevice *pdev = core->owner;
+	//uint16_t rd0size;
 	
-	printf("zxiw_can_receive here\n");
-	return 1;
+	bool link_up = core->mac[0x6e] & 0x40;
+	bool rx_enabled = core->mac[0x1ec] & 0x01;
+	bool pci_master = pdev->config[PCI_COMMAND] & PCI_COMMAND_MASTER;
+	
+	 
+	
+	
+	if(!link_up )//|| !rx_enabled || !pci_master)
+	{
+			printf("zxiw now cannot receive,link_up:%d,and rx_enabled:%d,and pci_master:%d\n",link_up,rx_enabled,pci_master);
+			return false;
+	}
+	
+	#if 0
+	rd0size = core->mac[0x214] | (core->mac[0x215] << 8);
+	if(rd0size <= 0)
+	{
+			printf("rx queue 0, it's size is 0,and not ok\n");
+			return false;
+	}
+	#endif
+	//printf("zxiw_can_receive here\n");
+	return true;
+}
+
+static bool zxiw_is_oversized(ZXIWCore *core,size_t size)
+{
+	static const int max_ethernet_size = 1518;
+	if(size > max_ethernet_size){
+			return true;
+	}
+	
+	return false;
+}
+
+
+static ssize_t zxiw_receive_iov(ZXIWCore *core,const struct iovec *iov,int iov_cnt)
+{
+	bool link_up = core->mac[0x6e] & 0x40;
+	bool rx_enabled = core->mac[0x1ec] & 0x01;
+	struct zxiw_rx_queue *rx_queue = &core->rx_queue[0];
+	uint8_t *filter_buf;
+	size_t size;
+	uint8_t config_cr1 = core->mac[0x9];
+	uint16_t tcr_rcr_config = core->mac[0x06] | (core->mac[0x07] << 8);
+	static const uint8_t broadcast[6] = {0xff,0xff,0xff,0xff,0xff,0xff};
+	bool mar_flag = false,bar_flag = false,ucast_flag = false;
+	size_t total_size;
+	
+	
+	if(!link_up || !rx_enabled)
+	{
+			printf("zxiw_receive_iov not ok,and link_up is %d,rx_enabled: %d\n",link_up,rx_enabled);
+			return -1;
+	}
+	
+	filter_buf = iov->iov_base;
+	size = iov_size(iov,iov_cnt);
+	
+	if(zxiw_is_oversized(core,size)){
+		return size;
+	}
+	
+	net_rx_pkt_set_protocols(rx_queue->rx_pkt,filter_buf,size);
+	
+	net_rx_pkt_set_packet_type(rx_queue->rx_pkt,get_eth_packet_type(PKT_GET_ETH_HDR(filter_buf)));
+	if(tcr_rcr_config & 0x10)
+		goto receive_starts;
+	
+	
+	
+	switch(net_rx_pkt_get_packet_type(rx_queue->rx_pkt)){
+	case ETH_PKT_UCAST:
+		if(config_cr1 & 0x01)
+		{
+			return size;
+		}else if(core->mac[0] == filter_buf[0] && core->mac[1] && filter_buf[1] && core->mac[2] ==filter_buf[2] && core->mac[3] == filter_buf[3] && \
+				core->mac[4] == filter_buf[4] && core->mac[5] == filter_buf[5]){
+				ucast_flag = true;
+				break;
+		}
+		return size;
+		
+	case ETH_PKT_BCAST:
+		 
+		if(tcr_rcr_config & 0x08 && !memcmp(filter_buf,broadcast,6)){
+				bar_flag = true;
+				break;
+		}
+		return size;
+		
+	case ETH_PKT_MCAST:
+		if(tcr_rcr_config & 0x04){
+			mar_flag = true;
+			break;
+		}else{
+				return size;
+		}
+	
+	default:
+		return size;
+			
+	}
+
+receive_starts:
+
+	total_size = size;// net_rx_pkt_get_total_len(rx_queue->rx_pkt);
+	dma_addr_t base;
+	dma_addr_t buf_dma_addr;
+	long long tmp_hi;
+	int i;
+	//struct iovec *iov = net_rx_pkt_get_iovec(rx_queue->rx_pkt);
+	uint16_t index = rx_queue->current_index;
+	uint16_t receive_num = 0;
+	
+	struct zxiw_rx_desc rx_desc;
+
+	tmp_hi = rx_queue->rx_queue_base_hi;
+	tmp_hi = (tmp_hi << 32);	
+	base = rx_queue->rx_queue_base_lo | tmp_hi;
+	PCIDevice *d = core->owner;
+	bool rx_desc_used_up = false;
+	uint16_t rx_buf_size;//,offset = 0;
+	uint16_t write_size;
+	uint32_t tmp_size = 0;
+	uint8_t buf1[60+4];
+	dma_addr_t desc_dma;
+
+	uint32_t isr_cause = 0;
+	bool isip4 = false ,isip6 = false ,isudp = false , istcp = false;
+	 printf("rx ring base:0x%lx\n",base);
+	 printf("rx_queue, queue_size:%ld\n",rx_queue->queue_size);
+	do{
+			if(index > rx_queue->queue_size){
+					index = 0;
+			}
+		
+			desc_dma = base + index*(sizeof(struct zxiw_rx_desc));	
+			 printf("rx desc base:0x%lx\n",desc_dma);
+			pci_dma_read(d,desc_dma,(uint8_t *)&rx_desc,sizeof(struct zxiw_rx_desc));
+			
+			if(!(rx_desc.desc0 & 0x80000000))
+			{	
+					/*produce used interrupt*/
+					printf("rx desc used up");
+					isr_cause = 1 << 13;
+					rx_desc_used_up = true;
+					if(receive_num)
+						isr_cause |= (1 << 8 | 1 << 2);
+					/*produce rx packet interrupt*/
+					break;
+			}
+			
+			buf_dma_addr = rx_desc.desc2 | ((rx_desc.desc3 & 0xffff) << 16);
+			rx_buf_size = (rx_desc.desc3 >> 16) & 0x3fff;
+			printf("rx buf size: %d,and recevie buf:0x%lx\n",rx_buf_size,buf_dma_addr);
+			if(total_size > rx_buf_size){
+					//total_size -= rx_buf_size;
+					//write_size = rx_buf_size;
+					printf("error,packet length error\n");
+					return size;
+					
+			 }else{
+				
+					write_size = total_size;
+					total_size = 0;
+			 }
+			 
+			 if(write_size < 64){
+					memcpy(buf1,filter_buf,write_size);
+					memset(buf1+write_size,0,64-write_size);
+					filter_buf = buf1;
+					if(size < 60)
+						write_size = 60;
+					
+			 }
+			 printf("write size:%d\n",write_size);
+			 pci_dma_write(d,buf_dma_addr,filter_buf,write_size);
+			 //offset += write_size;
+			 receive_num++;
+			 
+			 
+			 rx_desc.desc0 = 0;
+			 if(mar_flag)
+				rx_desc.desc0 = 1 << 13;
+			 else if(bar_flag)
+				rx_desc.desc0 = 1 << 12;
+			 else if(ucast_flag)
+				rx_desc.desc0 = 1 << 11;
+				
+				
+			 rx_desc.desc0 |= (1 << 15);
+			 tmp_size =  (write_size & 0x3fff)<< 16;
+			 rx_desc.desc0 |= tmp_size;
+			
+			 net_rx_pkt_get_protocols(rx_queue->rx_pkt,&isip4,&isip6,&isudp,&istcp);
+			
+			 if(isip4)
+				rx_desc.desc1 = 1 << 18;
+			if(isip6)
+				rx_desc.desc1 = 1 << 23;
+			if(isudp)
+				rx_desc.desc1 = 1 << 16;
+			if(istcp)
+				rx_desc.desc1 = 1 << 17;
+				
+				 printf("zxiw receive packet");
+				for(i = 0; i < 14;i++)
+				{
+						//printf(":%x",((uint8_t*)(iov->iov_base))[i]);
+						printf(":%x",filter_buf[i]);
+				}
+				printf("\n");
+			printf("and len:%ld\n",size);
+			 printf("upper protocal: ipv4:%d, ipv6:%d,udp:%d,tcp:%d,eth_type:0x%x\n",isip4,isip6,isudp,istcp,net_rx_pkt_get_packet_type(rx_queue->rx_pkt));
+			 /*write back rx desc here*/
+			 printf("rx_desc->desc0:0x%x\n",rx_desc.desc0);
+			 pci_dma_write(d,desc_dma,(uint8_t *)&rx_desc,sizeof(struct zxiw_rx_desc));
+				++index;
+				 
+			 index = (index % (rx_queue->queue_size+1));
+			 rx_queue->current_index = index;
+			 core->mac[0x1d8] = index;
+			 tmp_size = 0;
+			 
+	}while(total_size);
+	
+
+	if(rx_desc_used_up)
+	{
+			/*produce used up interrupt*/
+			isr_cause |= 1 << 13;
+			 
+	}
+	
+	if(receive_num)
+	{
+		/*produce receive packet interrupt*/
+		isr_cause |= (1 << 8 | 1 << 2);
+	}
+	printf("isr_cause: 0x%x\n",isr_cause);
+	zxiw_set_interrupt_cause(core,isr_cause);
+	
+	#if 0
+	core->mac[24] = isr_cause & 0xff;
+	core->mac[25] =( isr_cause >> 8) & 0xff; 
+	core->mac[26] = (isr_cause >> 16) & 0xff;
+	core->mac[27] = (isr_cause >> 24) & 0xff;
+	#endif
+	msix_notify(core->owner,0);
+	 return size;
+		
+
 }
 
 static ssize_t zxiw_receive(NetClientState *nc,const uint8_t *buf,size_t size)
 {
+	ZXIWState *s = qemu_get_nic_opaque(nc);
+	ZXIWCore *core = &s->core;
+	
+	const struct iovec iov = {
+			.iov_base = (uint8_t *)buf,
+			.iov_len = size
+	};
+	printf("zxiw and size:%ld\n",size);
+	return zxiw_receive_iov(core,&iov,1);
 
 	printf("ziw_receive here\n");
 	return size;
@@ -409,6 +954,15 @@ static ssize_t zxiw_receive(NetClientState *nc,const uint8_t *buf,size_t size)
 
 static void zxiw_link_status_change(NetClientState *nc)
 {
+	ZXIWState *s = qemu_get_nic_opaque(nc);
+	ZXIWCore *core = &s->core;
+	
+	//bool link_up = core->mac[0x6e] & 0x40;
+	
+	
+	zxiw_set_interrupt_cause(core, 1<<15);
+	
+	
 
 	printf("zxiw_link_status change here\n");
 }
@@ -492,20 +1046,16 @@ static void zxiw_update_flowctl_status(ZXIWCore *core)
 	}
 }
 
-void zxiw_start_recv(ZXIWCore *core)
+static void zxiw_start_recv(ZXIWCore *core)
 {
 
 	int i;
 	
+	qemu_get_queue(core->owner_nic)->link_down = false;
 	for(i = 0; i <= core->max_queue_num;i++)
-		qemu_flush_queued_packets(qemu_get_subqueue(core->onwer_nic,i));
+		qemu_flush_queued_packets(qemu_get_subqueue(core->owner_nic,i));
 }
 
-
-static void zxiw_set_interrupt_cause(ZXIWCore *core,uint32_t val)
-{
-	core->mac[] = val;
-}
 
 static inline void zxiw_autoneg_timer(void *opaque)
 {
@@ -525,7 +1075,7 @@ static const VMStateDescription zxiw_vmstate_tx = {
 	.version_id = 1,
 	.minimum_version_id = 1,
 	.fields = (VMStateField[]){
-		VMSTATE_UINT8(props.paylen,struct zxiw_tx),
+		VMSTATE_UINT8(props.paylen,struct zxiw_tx_queue),
 		VMSTATE_END_OF_LIST()
 	
 	}
@@ -539,7 +1089,7 @@ static const VMStateDescription zxiw_vmstate_rx = {
 	.minimum_version_id = 1,
 	.fields = (VMStateField[]){
 
-		VMSTATE_UINT8(props.checksum,struct zxiw_rx),
+		VMSTATE_UINT8(props.checksum,struct zxiw_rx_queue),
 		VMSTATE_END_OF_LIST()
 
 	}
@@ -556,7 +1106,7 @@ static void zxiw_core_pre_save(ZXIWCore *core)
 		zxiw_update_flowctl_status(core);
 	}
 
-	for(i = 0; i < ARRAY_SIZE(core->tx); i++){
+	for(i = 0; i < ARRAY_SIZE(core->tx_queue); i++){
 
 		;
 	}
@@ -609,8 +1159,8 @@ static const VMStateDescription zxiw_vmstate = {
 		VMSTATE_UINT8_ARRAY(core.permanent_mac,ZXIWState,ETH_ALEN),
 		VMSTATE_UINT16(subsys,ZXIWState),
 		VMSTATE_UINT16(subsys_ven,ZXIWState),
-		VMSTATE_STRUCT_ARRAY(core.tx,ZXIWState,ZXIW_TX_NUM_QUEUES,0,zxiw_vmstate_tx,struct zxiw_tx),
-		VMSTATE_STRUCT_ARRAY(core.rx,ZXIWState,ZXIW_RX_NUM_QUEUES,0,zxiw_vmstate_rx,struct zxiw_rx),
+		VMSTATE_STRUCT_ARRAY(core.tx_queue,ZXIWState,ZXIW_TX_NUM_QUEUES,0,zxiw_vmstate_tx,struct zxiw_tx_queue),
+		VMSTATE_STRUCT_ARRAY(core.rx_queue,ZXIWState,ZXIW_RX_NUM_QUEUES,0,zxiw_vmstate_rx,struct zxiw_rx_queue),
 		VMSTATE_END_OF_LIST()
 	}
 
@@ -618,6 +1168,7 @@ static const VMStateDescription zxiw_vmstate = {
 
 static void zxiw_autoneg_resume(ZXIWCore *core)
 {
+	printf("zxiw autoneg resume here\n");
 	if(zxiw_have_autoneg(core) && !(core->phy[PHY_STATUS] & MII_SR_AUTONEG_COMPLETE)){
 		qemu_get_queue(core->owner_nic)->link_down = false;
 		timer_mod(core->autoneg_timer,qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 500);
@@ -652,10 +1203,10 @@ static void zxiw_core_pci_realize(ZXIWCore *core, const uint8_t *eeprom_templ,ui
 
 	core->vmstate = qemu_add_vm_change_state_handler(zxiw_vm_state_change,core);
 	for(i = 0; i < ZXIW_TX_NUM_QUEUES;i++)
-		net_tx_pkt_init(&core->tx[i].tx_pkt,core->owner,ZXIW_MAX_TX_FRAGS,false);
+		net_tx_pkt_init(&core->tx_queue[i].tx_pkt,core->owner,ZXIW_MAX_TX_FRAGS,false);
 
 	for(i = 0; i < ZXIW_RX_NUM_QUEUES;i++)
-		net_rx_pkt_init(&core->rx[i].rx_pkt,false);
+		net_rx_pkt_init(&core->rx_queue[i].rx_pkt,false);
 
 	zxiw_core_prepare_eeprom(&core->eeprom,eeprom_templ,eeprom_size,PCI_DEVICE_GET_CLASS(core->owner)->device_id,macaddr);
 
@@ -663,11 +1214,13 @@ static void zxiw_core_pci_realize(ZXIWCore *core, const uint8_t *eeprom_templ,ui
 
 }
 
+
+#if 0
 static void zxiw_write_config(PCIDevice *pdev,uint32_t address,uint32_t val,int len)
 {
 	//ZXIWState *s = ZXIW(pdev);
 	
-	printf("zxiw_write_config here\n");
+	//printf("zxiw_write_config here\n");
 
 	pci_default_write_config(pdev,address,val,len);
 	
@@ -675,6 +1228,8 @@ static void zxiw_write_config(PCIDevice *pdev,uint32_t address,uint32_t val,int 
 		;//zxiw_start_recv(&s->core);
 	}
 }
+
+#endif
 
 static int zxiw_add_pm_capability(PCIDevice *pdev,uint8_t offset,uint16_t pmc)
 {
@@ -699,7 +1254,7 @@ static void pci_zxiw_realize(PCIDevice *pdev,Error **errp)
 	static const uint16_t zxiw_pm_offset = 0x50;
 
 	printf("into zxiw realize,and queue number is %d\n\n",s->conf.peers.queues);
-	pdev->config_write = zxiw_write_config;
+	//pdev->config_write = zxiw_write_config;
 	pdev->config[PCI_INTERRUPT_PIN] = 1;
 	
 	pci_set_word(pdev->config + PCI_SUBSYSTEM_VENDOR_ID,s->subsys_ven);
@@ -743,13 +1298,13 @@ static void zxiw_core_pci_uninit(ZXIWCore *core)
 	qemu_del_vm_change_state_handler(core->vmstate);
 	for(i = 0; i < ZXIW_TX_NUM_QUEUES;i++)
 	{
-		net_tx_pkt_reset(core->tx[i].tx_pkt);
-		net_tx_pkt_uninit(core->tx[i].tx_pkt);
+		net_tx_pkt_reset(core->tx_queue[i].tx_pkt);
+		net_tx_pkt_uninit(core->tx_queue[i].tx_pkt);
 	}	
 
 	for(i = 0; i < ZXIW_RX_NUM_QUEUES;i++)
 	{
-		net_rx_pkt_uninit(core->rx[i].rx_pkt);
+		net_rx_pkt_uninit(core->rx_queue[i].rx_pkt);
 	}
 
 }
@@ -815,6 +1370,7 @@ static const uint8_t zxiw_mac_reg_init[] = {
 static void zxiw_reset_mac_phy_default(ZXIWCore *core)
 {
 
+	printf("zxiw reset mac and phy to default\n");
 	memset(core->phy,0,sizeof(core->phy));
 	memmove(core->phy,zxiw_phy_reg_init,sizeof(zxiw_phy_reg_init));
 	memset(core->mac,0,sizeof(core->mac));
@@ -838,9 +1394,9 @@ static void zxiw_core_reset(ZXIWCore *core)
 
 	zxiw_reset_mac_addr(core->owner_nic,core->mac,core->permanent_mac);
 
-	for(i = 0; i < ARRAY_SIZE(core->tx);i++){
-		net_tx_pkt_reset(core->tx[i].tx_pkt);
-		memset(&core->tx[i].props,0,sizeof(core->tx[i].props));
+	for(i = 0; i < ARRAY_SIZE(core->tx_queue);i++){
+		net_tx_pkt_reset(core->tx_queue[i].tx_pkt);
+		memset(&core->tx_queue[i].props,0,sizeof(core->tx_queue[i].props));
 		
 	}
 #if 0

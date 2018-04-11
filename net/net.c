@@ -640,6 +640,9 @@ static ssize_t qemu_send_packet_async_with_flags(NetClientState *sender,
     qemu_hexdump((const char *)buf, stdout, "net", size);
 #endif
 
+
+    printf("qemu_send_packet_async_with_flags and sender->link_down is:%d\n",sender->link_down);
+
     if (sender->link_down || !sender->peer) {
         return size;
     }
@@ -658,7 +661,7 @@ static ssize_t qemu_send_packet_async_with_flags(NetClientState *sender,
     }
 
     queue = sender->peer->incoming_queue;
-	printf("%s,and sender->name is %s,and model is %s,and peer name is %s,and peer model is %s\n",__FUNCTION__,sender->name,sender->model,sender->peer->name,sender->peer->model);
+//	printf("%s,and sender->name is %s,and model is %s,and peer name is %s,and peer model is %s\n",__FUNCTION__,sender->name,sender->model,sender->peer->name,sender->peer->model);
    // queue = sender->peer->incoming_queue;
 
     return qemu_net_queue_send(queue, sender, flags, buf, size, sent_cb);
@@ -770,7 +773,7 @@ ssize_t qemu_sendv_packet_async(NetClientState *sender,
 
     queue = sender->peer->incoming_queue;
 
-	printf("%s,and sender->name is %s,and sender->model is %s,peer->name is %s,and peer->Model is %s\n",__FUNCTION__,sender->name,sender->model,sender->peer->name,sender->peer->model);
+//	printf("%s,and sender->name is %s,and sender->model is %s,peer->name is %s,and peer->Model is %s\n",__FUNCTION__,sender->name,sender->model,sender->peer->name,sender->peer->model);
     return qemu_net_queue_send_iov(queue, sender,
                                    QEMU_NET_PACKET_FLAG_NONE,
                                    iov, iovcnt, sent_cb);

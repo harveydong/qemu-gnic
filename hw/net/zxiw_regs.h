@@ -29,6 +29,23 @@
 #define ZXIW_MAC_SIZE 0x800
 #define	ZXIW_PHY_SIZE	0x90
 
+
+struct zxiw_tx_desc{
+
+	uint32_t tx_owner_packet_size;
+	uint32_t tx_cmdz;
+	uint32_t tx_data_buf0_lo;
+	uint32_t tx_q_data_buf0_hi;
+	
+	uint32_t tx_data_buf1_7[12];
+};
+
+struct zxiw_rx_desc {
+	uint32_t desc0;
+	uint32_t desc1;
+	uint32_t desc2;
+	uint32_t desc3;
+};
 /*all register default value,bit is 32*/
 
 
@@ -256,7 +273,7 @@
 
 
 
-#define ZXIW_STATUS_LINK 0x02
+#define ZXIW_STATUS_LINK 0x40
 #define ZXIW_CTRL_TFCE	 0x40
 #define ZXIW_CTRL_RFCE	 0x20
 #define ZXIW_CTRL_XONEN	 0x80
