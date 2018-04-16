@@ -38,6 +38,8 @@ ui/vnc-enc-tight.o: ui/vnc-enc-tight.c /root/qemu/include/qemu/osdep.h \
  /usr/include/glib-2.0/glib/gmappedfile.h \
  /usr/include/glib-2.0/glib/gmarkup.h \
  /usr/include/glib-2.0/glib/gmessages.h \
+ /usr/include/glib-2.0/glib/gvariant.h \
+ /usr/include/glib-2.0/glib/gvarianttype.h \
  /usr/include/glib-2.0/glib/goption.h \
  /usr/include/glib-2.0/glib/gpattern.h \
  /usr/include/glib-2.0/glib/gprimes.h /usr/include/glib-2.0/glib/gqsort.h \
@@ -55,9 +57,7 @@ ui/vnc-enc-tight.o: ui/vnc-enc-tight.c /root/qemu/include/qemu/osdep.h \
  /usr/include/glib-2.0/glib/gtrashstack.h \
  /usr/include/glib-2.0/glib/gtree.h \
  /usr/include/glib-2.0/glib/gurifuncs.h \
- /usr/include/glib-2.0/glib/gvarianttype.h \
- /usr/include/glib-2.0/glib/gvariant.h \
- /usr/include/glib-2.0/glib/gversion.h \
+ /usr/include/glib-2.0/glib/guuid.h /usr/include/glib-2.0/glib/gversion.h \
  /usr/include/glib-2.0/glib/deprecated/gallocator.h \
  /usr/include/glib-2.0/glib/deprecated/gcache.h \
  /usr/include/glib-2.0/glib/deprecated/gcompletion.h \
@@ -71,8 +71,7 @@ ui/vnc-enc-tight.o: ui/vnc-enc-tight.c /root/qemu/include/qemu/osdep.h \
  /root/qemu/include/qapi/qmp/qdict.h \
  /root/qemu/include/qapi/qmp/qobject.h qapi-types.h \
  /root/qemu/include/qapi/qmp/qlist.h /root/qemu/include/qapi/qmp/qnum.h \
- /root/qemu/include/qemu/module.h /usr/include/libpng12/png.h \
- /usr/include/libpng12/pngconf.h /root/qemu/include/qemu/bswap.h \
+ /root/qemu/include/qemu/module.h /root/qemu/include/qemu/bswap.h \
  /root/qemu/include/fpu/softfloat.h ui/vnc.h \
  /root/qemu/include/qemu/thread.h /root/qemu/include/qemu/processor.h \
  /root/qemu/include/qemu/thread-posix.h /root/qemu/include/ui/console.h \
@@ -198,6 +197,10 @@ config-host.h:
 
 /usr/include/glib-2.0/glib/gmessages.h:
 
+/usr/include/glib-2.0/glib/gvariant.h:
+
+/usr/include/glib-2.0/glib/gvarianttype.h:
+
 /usr/include/glib-2.0/glib/goption.h:
 
 /usr/include/glib-2.0/glib/gpattern.h:
@@ -238,9 +241,7 @@ config-host.h:
 
 /usr/include/glib-2.0/glib/gurifuncs.h:
 
-/usr/include/glib-2.0/glib/gvarianttype.h:
-
-/usr/include/glib-2.0/glib/gvariant.h:
+/usr/include/glib-2.0/glib/guuid.h:
 
 /usr/include/glib-2.0/glib/gversion.h:
 
@@ -281,10 +282,6 @@ qapi-types.h:
 /root/qemu/include/qapi/qmp/qnum.h:
 
 /root/qemu/include/qemu/module.h:
-
-/usr/include/libpng12/png.h:
-
-/usr/include/libpng12/pngconf.h:
 
 /root/qemu/include/qemu/bswap.h:
 

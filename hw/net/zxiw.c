@@ -1069,7 +1069,7 @@ static inline void zxiw_autoneg_timer(void *opaque)
 		zxiw_set_interrupt_cause(core,ZXIW_INTCAUSE_LSC);
 	}
 }
-
+#if 0
 static const VMStateDescription zxiw_vmstate_tx = {
 	.name = "zxiw-tx",
 	.version_id = 1,
@@ -1141,7 +1141,7 @@ static void zxiw_pre_save(void *opaque)
 
 }
 
-
+ 
 static const VMStateDescription zxiw_vmstate = {
 	.name = "zxiw",
 	.version_id = 1,
@@ -1165,6 +1165,7 @@ static const VMStateDescription zxiw_vmstate = {
 	}
 
 };
+#endif
 
 static void zxiw_autoneg_resume(ZXIWCore *core)
 {

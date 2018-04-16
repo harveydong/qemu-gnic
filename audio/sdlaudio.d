@@ -38,6 +38,8 @@ audio/sdlaudio.o: audio/sdlaudio.c /root/qemu/include/qemu/osdep.h \
  /usr/include/glib-2.0/glib/gmappedfile.h \
  /usr/include/glib-2.0/glib/gmarkup.h \
  /usr/include/glib-2.0/glib/gmessages.h \
+ /usr/include/glib-2.0/glib/gvariant.h \
+ /usr/include/glib-2.0/glib/gvarianttype.h \
  /usr/include/glib-2.0/glib/goption.h \
  /usr/include/glib-2.0/glib/gpattern.h \
  /usr/include/glib-2.0/glib/gprimes.h /usr/include/glib-2.0/glib/gqsort.h \
@@ -55,9 +57,7 @@ audio/sdlaudio.o: audio/sdlaudio.c /root/qemu/include/qemu/osdep.h \
  /usr/include/glib-2.0/glib/gtrashstack.h \
  /usr/include/glib-2.0/glib/gtree.h \
  /usr/include/glib-2.0/glib/gurifuncs.h \
- /usr/include/glib-2.0/glib/gvarianttype.h \
- /usr/include/glib-2.0/glib/gvariant.h \
- /usr/include/glib-2.0/glib/gversion.h \
+ /usr/include/glib-2.0/glib/guuid.h /usr/include/glib-2.0/glib/gversion.h \
  /usr/include/glib-2.0/glib/deprecated/gallocator.h \
  /usr/include/glib-2.0/glib/deprecated/gcache.h \
  /usr/include/glib-2.0/glib/deprecated/gcompletion.h \
@@ -65,20 +65,29 @@ audio/sdlaudio.o: audio/sdlaudio.c /root/qemu/include/qemu/osdep.h \
  /usr/include/glib-2.0/glib/deprecated/grel.h \
  /usr/include/glib-2.0/glib/deprecated/gthread.h \
  /usr/include/glib-2.0/glib/glib-autocleanups.h \
- /root/qemu/include/qemu/typedefs.h /usr/include/SDL/SDL.h \
- /usr/include/SDL/SDL_main.h /usr/include/SDL/SDL_stdinc.h \
- /usr/include/SDL/SDL_config.h /usr/include/SDL/SDL_platform.h \
- /usr/include/SDL/begin_code.h /usr/include/SDL/close_code.h \
- /usr/include/SDL/SDL_audio.h /usr/include/SDL/SDL_error.h \
- /usr/include/SDL/SDL_endian.h /usr/include/SDL/SDL_mutex.h \
- /usr/include/SDL/SDL_thread.h /usr/include/SDL/SDL_rwops.h \
- /usr/include/SDL/SDL_cdrom.h /usr/include/SDL/SDL_cpuinfo.h \
- /usr/include/SDL/SDL_events.h /usr/include/SDL/SDL_active.h \
- /usr/include/SDL/SDL_keyboard.h /usr/include/SDL/SDL_keysym.h \
- /usr/include/SDL/SDL_mouse.h /usr/include/SDL/SDL_video.h \
- /usr/include/SDL/SDL_joystick.h /usr/include/SDL/SDL_quit.h \
- /usr/include/SDL/SDL_loadso.h /usr/include/SDL/SDL_timer.h \
- /usr/include/SDL/SDL_version.h /usr/include/SDL/SDL_thread.h \
+ /root/qemu/include/qemu/typedefs.h /usr/include/SDL2/SDL.h \
+ /usr/include/SDL2/SDL_main.h /usr/include/SDL2/SDL_stdinc.h \
+ /usr/include/SDL2/SDL_config.h /usr/include/SDL2/SDL_platform.h \
+ /usr/include/SDL2/begin_code.h /usr/include/SDL2/close_code.h \
+ /usr/include/SDL2/SDL_assert.h /usr/include/SDL2/SDL_atomic.h \
+ /usr/include/SDL2/SDL_audio.h /usr/include/SDL2/SDL_error.h \
+ /usr/include/SDL2/SDL_endian.h /usr/include/SDL2/SDL_mutex.h \
+ /usr/include/SDL2/SDL_thread.h /usr/include/SDL2/SDL_rwops.h \
+ /usr/include/SDL2/SDL_clipboard.h /usr/include/SDL2/SDL_cpuinfo.h \
+ /usr/include/SDL2/SDL_events.h /usr/include/SDL2/SDL_video.h \
+ /usr/include/SDL2/SDL_pixels.h /usr/include/SDL2/SDL_rect.h \
+ /usr/include/SDL2/SDL_surface.h /usr/include/SDL2/SDL_blendmode.h \
+ /usr/include/SDL2/SDL_keyboard.h /usr/include/SDL2/SDL_keycode.h \
+ /usr/include/SDL2/SDL_scancode.h /usr/include/SDL2/SDL_mouse.h \
+ /usr/include/SDL2/SDL_joystick.h /usr/include/SDL2/SDL_gamecontroller.h \
+ /usr/include/SDL2/SDL_quit.h /usr/include/SDL2/SDL_gesture.h \
+ /usr/include/SDL2/SDL_touch.h /usr/include/SDL2/SDL_filesystem.h \
+ /usr/include/SDL2/SDL_haptic.h /usr/include/SDL2/SDL_hints.h \
+ /usr/include/SDL2/SDL_loadso.h /usr/include/SDL2/SDL_log.h \
+ /usr/include/SDL2/SDL_messagebox.h /usr/include/SDL2/SDL_power.h \
+ /usr/include/SDL2/SDL_render.h /usr/include/SDL2/SDL_shape.h \
+ /usr/include/SDL2/SDL_system.h /usr/include/SDL2/SDL_timer.h \
+ /usr/include/SDL2/SDL_version.h /usr/include/SDL2/SDL_thread.h \
  /root/qemu/include/qemu-common.h /root/qemu/include/qemu/fprintf-fn.h \
  /root/qemu/include/qemu/option.h /root/qemu/include/qemu/queue.h \
  /root/qemu/include/qemu/atomic.h /root/qemu/include/qapi/qmp/qdict.h \
@@ -193,6 +202,10 @@ config-host.h:
 
 /usr/include/glib-2.0/glib/gmessages.h:
 
+/usr/include/glib-2.0/glib/gvariant.h:
+
+/usr/include/glib-2.0/glib/gvarianttype.h:
+
 /usr/include/glib-2.0/glib/goption.h:
 
 /usr/include/glib-2.0/glib/gpattern.h:
@@ -233,9 +246,7 @@ config-host.h:
 
 /usr/include/glib-2.0/glib/gurifuncs.h:
 
-/usr/include/glib-2.0/glib/gvarianttype.h:
-
-/usr/include/glib-2.0/glib/gvariant.h:
+/usr/include/glib-2.0/glib/guuid.h:
 
 /usr/include/glib-2.0/glib/gversion.h:
 
@@ -255,59 +266,95 @@ config-host.h:
 
 /root/qemu/include/qemu/typedefs.h:
 
-/usr/include/SDL/SDL.h:
+/usr/include/SDL2/SDL.h:
 
-/usr/include/SDL/SDL_main.h:
+/usr/include/SDL2/SDL_main.h:
 
-/usr/include/SDL/SDL_stdinc.h:
+/usr/include/SDL2/SDL_stdinc.h:
 
-/usr/include/SDL/SDL_config.h:
+/usr/include/SDL2/SDL_config.h:
 
-/usr/include/SDL/SDL_platform.h:
+/usr/include/SDL2/SDL_platform.h:
 
-/usr/include/SDL/begin_code.h:
+/usr/include/SDL2/begin_code.h:
 
-/usr/include/SDL/close_code.h:
+/usr/include/SDL2/close_code.h:
 
-/usr/include/SDL/SDL_audio.h:
+/usr/include/SDL2/SDL_assert.h:
 
-/usr/include/SDL/SDL_error.h:
+/usr/include/SDL2/SDL_atomic.h:
 
-/usr/include/SDL/SDL_endian.h:
+/usr/include/SDL2/SDL_audio.h:
 
-/usr/include/SDL/SDL_mutex.h:
+/usr/include/SDL2/SDL_error.h:
 
-/usr/include/SDL/SDL_thread.h:
+/usr/include/SDL2/SDL_endian.h:
 
-/usr/include/SDL/SDL_rwops.h:
+/usr/include/SDL2/SDL_mutex.h:
 
-/usr/include/SDL/SDL_cdrom.h:
+/usr/include/SDL2/SDL_thread.h:
 
-/usr/include/SDL/SDL_cpuinfo.h:
+/usr/include/SDL2/SDL_rwops.h:
 
-/usr/include/SDL/SDL_events.h:
+/usr/include/SDL2/SDL_clipboard.h:
 
-/usr/include/SDL/SDL_active.h:
+/usr/include/SDL2/SDL_cpuinfo.h:
 
-/usr/include/SDL/SDL_keyboard.h:
+/usr/include/SDL2/SDL_events.h:
 
-/usr/include/SDL/SDL_keysym.h:
+/usr/include/SDL2/SDL_video.h:
 
-/usr/include/SDL/SDL_mouse.h:
+/usr/include/SDL2/SDL_pixels.h:
 
-/usr/include/SDL/SDL_video.h:
+/usr/include/SDL2/SDL_rect.h:
 
-/usr/include/SDL/SDL_joystick.h:
+/usr/include/SDL2/SDL_surface.h:
 
-/usr/include/SDL/SDL_quit.h:
+/usr/include/SDL2/SDL_blendmode.h:
 
-/usr/include/SDL/SDL_loadso.h:
+/usr/include/SDL2/SDL_keyboard.h:
 
-/usr/include/SDL/SDL_timer.h:
+/usr/include/SDL2/SDL_keycode.h:
 
-/usr/include/SDL/SDL_version.h:
+/usr/include/SDL2/SDL_scancode.h:
 
-/usr/include/SDL/SDL_thread.h:
+/usr/include/SDL2/SDL_mouse.h:
+
+/usr/include/SDL2/SDL_joystick.h:
+
+/usr/include/SDL2/SDL_gamecontroller.h:
+
+/usr/include/SDL2/SDL_quit.h:
+
+/usr/include/SDL2/SDL_gesture.h:
+
+/usr/include/SDL2/SDL_touch.h:
+
+/usr/include/SDL2/SDL_filesystem.h:
+
+/usr/include/SDL2/SDL_haptic.h:
+
+/usr/include/SDL2/SDL_hints.h:
+
+/usr/include/SDL2/SDL_loadso.h:
+
+/usr/include/SDL2/SDL_log.h:
+
+/usr/include/SDL2/SDL_messagebox.h:
+
+/usr/include/SDL2/SDL_power.h:
+
+/usr/include/SDL2/SDL_render.h:
+
+/usr/include/SDL2/SDL_shape.h:
+
+/usr/include/SDL2/SDL_system.h:
+
+/usr/include/SDL2/SDL_timer.h:
+
+/usr/include/SDL2/SDL_version.h:
+
+/usr/include/SDL2/SDL_thread.h:
 
 /root/qemu/include/qemu-common.h:
 
